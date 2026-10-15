@@ -2,8 +2,30 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#04070f" />
+    <meta name="color-scheme" content="dark" />
     <title>Globe — 3D World</title>
+    <script>
+      (function () {
+        var vv = window.visualViewport;
+        var w = Math.round(window.innerWidth);
+        var h = Math.round(window.innerHeight);
+        var layout = "handset";
+        if (h <= 520 && w > h) layout = "land";
+        else if (w >= 1100 && h >= 680 && w / h >= 1.15) layout = "desk";
+        else if (w >= 600 && h >= 560) layout = "slate";
+        var root = document.documentElement;
+        root.dataset.layout = layout;
+        root.style.setProperty("--vv-top", ((vv && vv.offsetTop) || 0) + "px");
+        root.style.setProperty("--vv-left", ((vv && vv.offsetLeft) || 0) + "px");
+        root.style.setProperty("--vv-width", w + "px");
+        root.style.setProperty("--vv-height", h + "px");
+      })();
+    </script>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23081422' stroke='%235eead4' stroke-width='1.5'/%3E%3Cellipse cx='16' cy='16' rx='6' ry='14' fill='none' stroke='%235eead4' stroke-width='1'/%3E%3Cpath d='M2 16h28M16 2c4 4 6 9 6 14s-2 10-6 14c-4-4-6-9-6-14s2-10 6-14z' fill='none' stroke='%2388c0ff' stroke-width='0.8'/%3E%3C/svg%3E" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -34,9 +56,10 @@
         </div>
         <p class="hint">Drag to spin · Search food or festivals · Trips fly the globe</p>
         <div class="top-actions">
-          <button id="btn-reset" type="button">Reset view</button>
-          <button id="btn-autorotate" type="button" class="active" aria-pressed="true">Auto-rotate</button>
-          <button id="btn-celestial-panel" type="button" class="mobile-only">Sky</button>
+          <button id="btn-reset" type="button"><span class="long">Reset view</span><span class="short">Reset</span></button>
+          <button id="btn-autorotate" type="button" class="active" aria-pressed="true"><span class="long">Auto-rotate</span><span class="short">Spin</span></button>
+          <button id="btn-places-panel" type="button" class="compact-only" aria-expanded="false">Places</button>
+          <button id="btn-celestial-panel" type="button" class="compact-only" aria-expanded="false">Sky</button>
         </div>
       </header>
 
@@ -44,10 +67,11 @@
         <div class="panel-head">
           <h2>Featured locations</h2>
           <span id="country-count" class="count"></span>
+          <button id="btn-sheet" type="button" class="tiny sheet-toggle" aria-expanded="true">Hide</button>
         </div>
         <label class="search">
           <span class="sr-only">Search countries</span>
-          <input id="search" type="search" placeholder="Search any country, food, festival…" autocomplete="off" />
+          <input id="search" type="search" placeholder="Country, food, festival…" autocomplete="off" enterkeyhint="search" />
         </label>
         <div id="search-results" class="search-results" hidden></div>
         <nav class="side-tabs" id="side-tabs">
@@ -103,7 +127,7 @@
       <div id="polaroid-lightbox" hidden>
         <div class="polaroid-stage">
           <figure class="polaroid polaroid-lg" id="polaroid-card">
-            <img id="polaroid-img" alt="" />
+            <img id="polaroid-img" alt="" draggable="false" />
             <figcaption>
               <strong id="polaroid-caption"></strong>
               <span id="polaroid-credit"></span>

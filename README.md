@@ -43,8 +43,10 @@ npm run preview
 | Action | What happens |
 | --- | --- |
 | Drag | Spin the globe |
-| Scroll | Zoom |
+| Scroll | Zoom in close. The ground has mountain and ocean relief |
 | Click a marker | Fly to that country |
+| Zoom in | Gold dots for each country's first-level divisions |
+| Borders | Country outlines drawn on the Earth |
 | Search | Countries, cities, food, festivals (`fuchka`, `Durga Puja`) |
 | **Places / Trips / Atlas** | Featured cities, camera stories, pinned places |
 | **Pin** | Saves to Atlas and to `?pins=` in the URL |
@@ -58,9 +60,11 @@ Photos are copied from Wikimedia Commons as local data URLs and shown with autho
 ## Stack
 
 - [Vite](https://vitejs.dev/) + [Three.js](https://threejs.org/)
-- Custom Earth day/night shader, atmosphere, clouds, sun & moon
+- Custom Earth day/night shader, atmosphere, clouds, sun and moon
+- Country borders and first-level divisions for 195 countries
+- Closer zoom, terrain relief, and layouts for phones, tablets, and desktops
 - Country rankings (Happiness, Henley passport, Global Firepower, IMF GDP, HDI, GPI)
-- City catalogs for India (28 states, Kolkata, Delhi, Chennai, Mumbai, …)
+- City catalogs for India and featured places around the world
 
 ## License
 

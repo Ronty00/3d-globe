@@ -52,7 +52,7 @@ const RAW = [
   ["Ecuador", "Quito", -0.1807, -78.4678, "Americas", "ec"],
   ["Egypt", "Cairo", 30.0444, 31.2357, "Africa", "eg"],
   ["El Salvador", "San Salvador", 13.6929, -89.2182, "Americas", "sv"],
-  ["Equatorial Guinea", "Malabo", 3.7504, 8.7371, "Africa", "gq"],
+  ["Equatorial Guinea", "Ciudad de la Paz", 1.5889, 10.8225, "Africa", "gq"],
   ["Eritrea", "Asmara", 15.3229, 38.9251, "Africa", "er"],
   ["Estonia", "Tallinn", 59.437, 24.7536, "Europe", "ee"],
   ["Eswatini", "Mbabane", -26.3054, 31.1367, "Africa", "sz"],

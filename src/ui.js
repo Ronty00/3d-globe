@@ -20,6 +20,7 @@ import {
   pinKey,
   locToPin,
 } from "./data/explore.js";
+import { notifyStage } from "./layout.js";
 
 export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore }) {
   const featuredList = document.getElementById("featured-list");
@@ -32,6 +33,26 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
   let compareA = null;
   let compareArmed = false;
   let pins = pinsFromURL();
+  let userCollapsed = false;
+  const sheet = document.querySelector(".featured-panel");
+  const sky = document.querySelector(".celestial-panel");
+
+  document.addEventListener("selectstart", (e) => {
+    const el = e.target instanceof Element ? e.target : e.target?.parentElement;
+    if (el?.closest("input, textarea, [contenteditable='true']")) return;
+    e.preventDefault();
+  });
+  document.addEventListener("dragstart", (e) => {
+    const el = e.target instanceof Element ? e.target : null;
+    if (el?.closest("input, textarea")) return;
+    e.preventDefault();
+  });
+
+  if (window.matchMedia("(pointer: coarse)").matches) {
+    document.getElementById("status-hover").textContent = "Tap a country";
+    const hint = document.querySelector(".polaroid-hint");
+    if (hint) hint.textContent = "Drag to rotate · pinch to zoom · tap outside to close";
+  }
 
   document.getElementById("country-count").textContent = `${countries.length} countries`;
 
@@ -55,6 +76,7 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
 
   search.addEventListener("input", () => {
     const q = search.value;
+    if (q.trim()) revealSheetForSearch();
     if (!q.trim()) {
       results.hidden = true;
       results.innerHTML = "";
@@ -142,8 +164,77 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
     onCelestial("setHours", Number(slider.value));
   });
 
+  function layoutName() {
+    return document.documentElement.dataset.layout || "desk";
+  }
+
+  function syncDrawers() {
+    const skyBtn = document.getElementById("btn-celestial-panel");
+    const placesBtn = document.getElementById("btn-places-panel");
+    const sheetBtn = document.getElementById("btn-sheet");
+    const skyOpen = sky.classList.contains("is-open");
+    const placesOpen = sheet.classList.contains("is-open");
+    const collapsed = sheet.classList.contains("is-collapsed");
+    skyBtn.setAttribute("aria-expanded", String(skyOpen));
+    skyBtn.classList.toggle("active", skyOpen);
+    placesBtn.setAttribute("aria-expanded", String(placesOpen));
+    placesBtn.classList.toggle("active", placesOpen);
+    sheetBtn.setAttribute("aria-expanded", String(!collapsed));
+    sheetBtn.textContent = collapsed ? "Show" : "Hide";
+    notifyStage();
+  }
+
+  function revealSheetForSearch() {
+    const layout = layoutName();
+    if (layout === "handset") {
+      userCollapsed = false;
+      sheet.classList.remove("is-collapsed", "is-covered");
+      sky.classList.remove("is-open");
+      syncDrawers();
+    } else if (layout === "land" && !sheet.classList.contains("is-open")) {
+      sheet.classList.add("is-open");
+      sky.classList.remove("is-open");
+      syncDrawers();
+    }
+  }
+
   document.getElementById("btn-celestial-panel").addEventListener("click", () => {
-    document.querySelector(".celestial-panel").classList.toggle("is-open");
+    const layout = layoutName();
+    const open = !sky.classList.contains("is-open");
+    sky.classList.toggle("is-open", open);
+    if (layout === "handset") {
+      sheet.classList.toggle("is-covered", open);
+      if (open) sheet.classList.add("is-collapsed");
+      else sheet.classList.toggle("is-collapsed", userCollapsed);
+    }
+    if ((layout === "land" || layout === "slate") && open) sheet.classList.remove("is-open");
+    syncDrawers();
+  });
+
+  document.getElementById("btn-places-panel").addEventListener("click", () => {
+    const open = !sheet.classList.contains("is-open");
+    sheet.classList.toggle("is-open", open);
+    if (open) sky.classList.remove("is-open");
+    syncDrawers();
+  });
+
+  document.getElementById("btn-sheet").addEventListener("click", () => {
+    userCollapsed = !sheet.classList.contains("is-collapsed");
+    sheet.classList.toggle("is-collapsed", userCollapsed);
+    if (!userCollapsed) {
+      sky.classList.remove("is-open");
+      sheet.classList.remove("is-covered");
+    }
+    syncDrawers();
+  });
+
+  document.documentElement.addEventListener("layoutchange", () => {
+    const layout = layoutName();
+    sky.classList.remove("is-open");
+    sheet.classList.remove("is-open", "is-covered");
+    if (layout === "handset") sheet.classList.toggle("is-collapsed", userCollapsed);
+    else sheet.classList.remove("is-collapsed");
+    syncDrawers();
   });
 
   function closeDossier() {
@@ -341,16 +432,25 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
       closeDossier();
     },
     showTooltip(loc, x, y) {
-      if (!loc) {
+      if (!loc || window.matchMedia("(pointer: coarse)").matches) {
         tooltip.hidden = true;
         return;
       }
       tooltip.hidden = false;
-      tooltip.style.left = `${x}px`;
-      tooltip.style.top = `${y}px`;
       tooltip.textContent = loc.displayName
         ? `${loc.displayName} · ${loc.country || loc.name}`
         : `${loc.name} · ${loc.capital}`;
+      const pad = 8;
+      const tw = tooltip.offsetWidth;
+      const th = tooltip.offsetHeight;
+      const bounds = canvasBounds();
+      let left = x + 14;
+      let top = y - th - 12;
+      if (left + tw > bounds.right - pad) left = Math.max(bounds.left + pad, x - tw - 14);
+      if (top < bounds.top + pad) top = y + 18;
+      if (top + th > bounds.bottom - pad) top = Math.max(bounds.top + pad, bounds.bottom - th - pad);
+      tooltip.style.left = `${Math.round(left)}px`;
+      tooltip.style.top = `${Math.round(top)}px`;
     },
     setHours(hours) {
       slider.value = String(hours);
@@ -366,6 +466,11 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
       if (label) document.getElementById("loader-status").textContent = label;
     },
   };
+}
+
+function canvasBounds() {
+  const canvas = document.getElementById("globe");
+  return canvas?.getBoundingClientRect() || { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
 }
 
 function toLocation(item) {
@@ -614,7 +719,7 @@ function renderPlacesTab(iso, loc, active) {
     document.getElementById("tab-places").innerHTML = "<p>Open the capital marker, or search a city name.</p>";
     return;
   }
-  const groups = { state: "States & territories", capital: "Capitals", city: "Cities" };
+  const groups = { state: "Administrative divisions", capital: "Capitals", city: "Cities" };
   const html = Object.entries(groups)
     .map(([type, label]) => {
       const rows = items.filter((p) => p.type === type);
@@ -645,7 +750,7 @@ function renderPlacesTab(iso, loc, active) {
 function photoFigure(photo) {
   const id = storePhoto(photo);
   return `<figure class="polaroid" data-photo-id="${id}" data-caption="${escapeHtml(photo.title || "")}" style="--tilt:-2deg">
-    <img src="${photo.dataUrl}" alt="${escapeHtml(photo.title || "")}" />
+    <img src="${photo.dataUrl}" alt="${escapeHtml(photo.title || "")}" draggable="false" />
     <figcaption><strong>${escapeHtml(photo.title || "Photo")}</strong><span>${escapeHtml(creditLine(photo))}</span></figcaption>
   </figure>`;
 }
@@ -673,7 +778,7 @@ async function loadCulturePhotos() {
         const id = storePhoto(photo);
         el.classList.remove("is-loading");
         el.dataset.photoId = id;
-        el.innerHTML = `<img src="${photo.dataUrl}" alt="${escapeHtml(caption)}" /><figcaption><strong>${escapeHtml(caption)}</strong><span>${escapeHtml(creditLine(photo))}</span></figcaption>`;
+        el.innerHTML = `<img src="${photo.dataUrl}" alt="${escapeHtml(caption)}" draggable="false" /><figcaption><strong>${escapeHtml(caption)}</strong><span>${escapeHtml(creditLine(photo))}</span></figcaption>`;
       } catch {
         el.remove();
       }
@@ -725,6 +830,8 @@ function bindPolaroidLightbox() {
   });
 
   card.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
     drag = { x: e.clientX, y: e.clientY };
     card.setPointerCapture(e.pointerId);
     card.style.cursor = "grabbing";

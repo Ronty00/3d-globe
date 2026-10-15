@@ -5,8 +5,10 @@ import { createWorld } from "./world.js";
 import { createMarkers } from "./markers.js";
 import { bindUI, setHoverStatus } from "./ui.js";
 import { EARTH_RADIUS, easeInOutCubic, latLngToVector3, slerpCamera } from "./math.js";
+import { earthAngleAt, fitVerticalFov, installViewport, measureOcclusion } from "./layout.js";
 import { featured } from "./data/locations.js";
 import { createGlobeExtras } from "./globeExtras.js";
+import { createBorders } from "./borders.js";
 import { createAmbience } from "./sound.js";
 import { resolveStop } from "./data/explore.js";
 
@@ -17,8 +19,8 @@ const renderer = new THREE.WebGLRenderer({
   alpha: false,
   powerPreference: "high-performance",
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.18;
@@ -35,8 +37,9 @@ const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.07;
 controls.enablePan = false;
-controls.minDistance = 2.7;
+controls.minDistance = 1.88;
 controls.maxDistance = 7.4;
+controls.zoomSpeed = 1.5;
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.55;
 controls.target.set(0, 0, 0);
@@ -60,6 +63,7 @@ const state = {
 
 let world;
 let markers;
+let borders;
 let extras;
 let fly = null;
 const ambience = createAmbience();
@@ -227,13 +231,12 @@ async function focusLocation(loc) {
   endCam.normalize().multiplyScalar(3.35);
   const moving = flyTo(endCam);
 
+  const samePoint = (r) => Math.abs(r.lat - loc.lat) < 0.12 && Math.abs(r.lng - loc.lng) < 0.12;
   const rec =
-    markers.records.find(
-      (r) =>
-        r.id === loc.id ||
-        r.featuredId === loc.id ||
-        (Math.abs(r.lat - loc.lat) < 0.4 && Math.abs(r.lng - loc.lng) < 0.4)
-    ) || loc;
+    markers.records.find((r) => loc.placeId && (r.placeId === loc.placeId || r.id === loc.placeId)) ||
+    markers.records.find((r) => !loc.placeId && (r.id === loc.id || r.featuredId === loc.id)) ||
+    markers.records.find(samePoint) ||
+    loc;
 
   const featuredMatch = featured.find(
     (f) => f.id === loc.id || (Math.abs(f.lat - loc.lat) < 0.4 && Math.abs(f.lng - loc.lng) < 0.4)
@@ -253,9 +256,16 @@ async function focusLocation(loc) {
   await moving;
 }
 
+function ndc(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width || window.innerWidth;
+  const h = rect.height || window.innerHeight;
+  pointer.x = ((clientX - rect.left) / w) * 2 - 1;
+  pointer.y = -((clientY - rect.top) / h) * 2 + 1;
+}
+
 function pick(clientX, clientY) {
-  pointer.x = (clientX / window.innerWidth) * 2 - 1;
-  pointer.y = -(clientY / window.innerHeight) * 2 + 1;
+  ndc(clientX, clientY);
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObject(markers.pickables, false);
   if (!hits.length) return null;
@@ -275,8 +285,7 @@ canvas.addEventListener("pointerup", (e) => {
   down = null;
   scheduleResume();
   if (dist > 6) return;
-  pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
-  pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  ndc(e.clientX, e.clientY);
   raycaster.setFromCamera(pointer, camera);
   const site = extras?.pickSite(raycaster);
   if (site) {
@@ -294,9 +303,9 @@ canvas.addEventListener("pointermove", (e) => {
   if (id !== hoverId) {
     hoverId = id;
     if (rec) setHoverStatus(`${rec.displayName || rec.name} · ${rec.capital}`);
-    else setHoverStatus("Hover a country");
+    else setHoverStatus(camera.userData.coarsePointer ? "Tap a country" : "Hover a country");
   }
-  ui.showTooltip(rec, e.clientX, e.clientY);
+  ui.showTooltip(down ? null : rec, e.clientX, e.clientY);
 });
 canvas.addEventListener("pointerleave", () => {
   ui.showTooltip(null);
@@ -312,6 +321,9 @@ canvas.addEventListener(
 );
 
 window.addEventListener("keydown", (e) => {
+  const tag = e.target?.tagName;
+  const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
+  if (typing) return;
   if (e.key === "Escape") {
     flyTo(HOME_POS.clone());
     markers.select(null);
@@ -323,13 +335,86 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+const coarseQuery = window.matchMedia("(pointer: coarse)");
+const syncCoarse = () => {
+  camera.userData.coarsePointer = coarseQuery.matches;
+};
+syncCoarse();
+coarseQuery.addEventListener?.("change", syncCoarse);
+
+const homeDistance = HOME_POS.length();
+
+function onViewport(box) {
+  canvas.style.top = `${box.top}px`;
+  canvas.style.left = `${box.left}px`;
+  canvas.style.width = `${box.width}px`;
+  canvas.style.height = `${box.height}px`;
+  const hud = document.getElementById("hud");
+  hud.style.top = "0px";
+  hud.style.left = "0px";
+  hud.style.width = `${box.width}px`;
+  hud.style.height = `${box.height}px`;
+  hud.style.transform = `translate(${box.left}px, ${box.top}px)`;
+
+  if (box.width < 2 || box.height < 2) return;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(box.width, box.height, false);
+  syncBorderResolution();
+
+  const rect = canvas.getBoundingClientRect();
+  const bar = document.querySelector(".topbar");
+  if (bar) {
+    const hudBox = hud.getBoundingClientRect();
+    const barBox = bar.getBoundingClientRect();
+    const barBottom = Math.max(36, Math.ceil(barBox.bottom - hudBox.top + 6));
+    document.documentElement.style.setProperty("--bar-bottom", `${barBottom}px`);
+  }
+  const occlude = measureOcclusion(rect);
+  camera.userData.cssHeight = box.height;
+  camera.aspect = box.width / Math.max(1, box.height);
+
+  if (!occlude.frame) {
+    camera.fov = 42;
+    if (camera.view?.enabled) camera.clearViewOffset();
+    else camera.updateProjectionMatrix();
+    return;
+  }
+
+  const fit = fitVerticalFov({
+    width: box.width,
+    height: box.height,
+    occlude,
+    earthAngle: earthAngleAt(homeDistance),
+    margin: 0.9,
+  });
+  camera.fov = fit.fov;
+  if (Math.hypot(fit.offsetX, fit.offsetY) < 2) {
+    if (camera.view?.enabled) camera.clearViewOffset();
+    else camera.updateProjectionMatrix();
+  } else {
+    camera.setViewOffset(box.width, box.height, fit.offsetX, fit.offsetY, box.width, box.height);
+  }
+}
+
+const refreshViewport = installViewport(onViewport);
 
 const clock = new THREE.Clock();
+
+function syncCameraNear() {
+  const gap = camera.position.length() - EARTH_RADIUS;
+  const next = Math.min(0.12, Math.max(0.008, gap * 0.22));
+  if (Math.abs(camera.near - next) <= 0.002) return;
+  camera.near = next;
+  camera.updateProjectionMatrix();
+}
+
+function syncBorderResolution() {
+  if (!borders) return;
+  const w = renderer.domElement.width;
+  const h = renderer.domElement.height;
+  if (w < 2 || h < 2) return;
+  borders.material.resolution.set(w, h);
+}
 
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -354,6 +439,8 @@ function tick() {
 
   world?.update(dt, state);
   world?.earthGroup.updateMatrixWorld();
+  syncCameraNear();
+  syncBorderResolution();
   markers?.update(t, state.selectedId, camera);
   ui.setHours(state.hours);
   renderer.render(scene, camera);
@@ -363,8 +450,10 @@ function tick() {
 async function boot() {
   world = await createWorld(scene, (p, label) => ui.setLoadProgress(p, label));
   markers = createMarkers(world.earthGroup);
+  borders = createBorders(world.earthGroup);
   extras = createGlobeExtras(world.earthGroup);
   ui.hideLoader();
+  refreshViewport(true);
   tick();
 }
 

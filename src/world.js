@@ -11,13 +11,20 @@ const TEX = {
 };
 
 const earthVertex = /* glsl */ `
+  uniform sampler2D bumpMap;
   varying vec2 vUv;
   varying vec3 vNormalW;
   varying vec3 vPosW;
   void main() {
     vUv = uv;
-    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    // Topology is 0 on the ocean and about 0.95 on the highest land.
+    // The clamp stays under the country borders, which sit 0.007 above the sphere.
+    float h = textureLod(bumpMap, uv, 0.0).r;
+    float lift = clamp((h - 0.015) * 0.0064, -0.0020, 0.0056);
+    vec3 displaced = position + normal * lift;
+    vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
     vPosW = worldPos.xyz;
+    // Sphere normal, not the slope. The day/night split uses this so night ridges stay dark.
     vNormalW = normalize(mat3(modelMatrix) * normal);
     gl_Position = projectionMatrix * viewMatrix * worldPos;
   }
@@ -39,38 +46,45 @@ const earthFragment = /* glsl */ `
     vec3 n = normalize(vNormalW);
     vec3 sunDir = normalize(sunDirection);
     float ndl = dot(n, sunDir);
+    vec3 viewDir = normalize(cameraPosition - vPosW);
 
-    // Wide terminator: the whole sun-facing hemisphere is daytime,
-    // not a Lambert hotspot at the subsolar point.
-    float dayFactor = smoothstep(-0.12, 0.14, ndl);
+    // Soft shadow where day meets night. No colored rim.
+    float dayFactor = smoothstep(-0.02, 0.12, ndl);
 
     vec3 dayColor = texture(dayMap, vUv).rgb;
-    vec3 nightColor = texture(nightMap, vUv).rgb * 1.9;
-    float bump = texture(bumpMap, vUv).r;
-    dayColor *= 1.0 + bump * 0.08;
+    vec3 nightColor = texture(nightMap, vUv).rgb * 1.35;
 
-    // Almost-flat wrap so noon is a bit brighter than late afternoon,
-    // but the full dayside stays readable Earth, not a spotlight.
-    float wrap = clamp(ndl * 0.42 + 0.62, 0.55, 1.12) * 2.0;
-    vec3 litDay = dayColor * wrap;
+    // Per-pixel slope from the height map. The day/night split stays on the sphere normal.
+    // Gain stays small on the full disk and rises when the camera is close,
+    // so ridges show up close without mottling the sunny side.
+    float h = texture(bumpMap, vUv).r;
+    float uvSpan = length(dFdx(vUv)) + length(dFdy(vUv));
+    float gain = clamp(0.035 + 0.000015 / max(uvSpan, 0.000001), 0.035, 0.85);
+    vec3 surfX = dFdx(vPosW) + n * dFdx(h) * gain;
+    vec3 surfY = dFdy(vPosW) + n * dFdy(h) * gain;
+    vec3 nShade = cross(surfX, surfY);
+    float shadeLen = length(nShade);
+    nShade = shadeLen > 0.00001 ? nShade / shadeLen : n;
+    if (dot(nShade, viewDir) < 0.0) nShade = -nShade;
+    float slope = clamp(dot(nShade, sunDir) - ndl, -0.45, 0.45);
+    dayColor *= mix(1.0, 1.0 + slope * 1.55, dayFactor);
 
+    // The day photo is linear and reads too dark on this canvas. The curve
+    // lifts the sunny side to a full-day photo and keeps snow from clipping.
+    vec3 litDay = vec3(1.0) - exp(-dayColor * 5.5);
     vec3 albedo = mix(nightColor, litDay, dayFactor);
 
-    float terminator = 1.0 - smoothstep(0.0, 0.28, abs(ndl));
-    albedo += vec3(1.0, 0.52, 0.22) * terminator * 0.1;
-
-    vec3 viewDir = normalize(cameraPosition - vPosW);
     vec3 halfV = normalize(sunDir + viewDir);
     float specMask = texture(specularMap, vUv).r;
-    float spec = pow(max(dot(n, halfV), 0.0), 52.0) * specMask * dayFactor * 0.28;
+    float spec = pow(max(dot(nShade, halfV), 0.0), 70.0) * specMask * dayFactor * 0.14;
 
     float moonDiff = max(dot(n, normalize(moonDirection)), 0.0) * moonIntensity;
-    albedo += dayColor * moonDiff * 0.05;
+    albedo += vec3(0.55, 0.68, 1.0) * moonDiff * 0.02;
 
-    float fresnel = pow(1.0 - max(dot(n, viewDir), 0.0), 3.6);
-    albedo += vec3(0.45, 0.68, 1.0) * fresnel * 0.07 * dayFactor;
+    float fresnel = pow(1.0 - max(dot(n, viewDir), 0.0), 4.2);
+    albedo += vec3(0.55, 0.75, 1.0) * fresnel * 0.02 * dayFactor;
 
-    gl_FragColor = vec4(albedo + spec * vec3(0.9, 0.95, 1.0), 1.0);
+    gl_FragColor = linearToOutputTexel(vec4(albedo + spec * vec3(0.85, 0.92, 1.0), 1.0));
   }
 `;
 
@@ -93,11 +107,10 @@ const cloudFragment = /* glsl */ `
     vec4 tex = texture(cloudMap, vUv);
     float cloud = tex.r * mix(tex.a, 1.0, step(0.999, tex.a));
     float ndl = dot(normalize(vNormalW), normalize(sunDirection));
-    float day = smoothstep(-0.12, 0.16, ndl);
-    float wrap = clamp(ndl * 0.35 + 0.7, 0.0, 1.0);
-    vec3 col = mix(vec3(0.22, 0.26, 0.34), vec3(1.35, 1.32, 1.28) * wrap, day);
-    float alpha = cloud * mix(0.05, 0.4, day);
-    gl_FragColor = vec4(col, alpha);
+    float day = smoothstep(-0.02, 0.12, ndl);
+    vec3 col = mix(vec3(0.04, 0.05, 0.07), vec3(1.02, 1.01, 0.98), day);
+    float alpha = cloud * mix(0.028, 0.16, day);
+    gl_FragColor = linearToOutputTexel(vec4(col, alpha));
   }
 `;
 
@@ -114,13 +127,17 @@ const atmosVertex = /* glsl */ `
 
 const atmosFragment = /* glsl */ `
   uniform vec3 glowColor;
+  uniform vec3 sunDirection;
   uniform float power;
   uniform float intensity;
   varying vec3 vNormal;
   varying vec3 vView;
   void main() {
-    float fresnel = pow(intensity - abs(dot(normalize(vNormal), normalize(vView))), power);
-    gl_FragColor = vec4(glowColor, 1.0) * fresnel;
+    vec3 n = normalize(vNormal);
+    float rim = pow(1.0 - abs(dot(n, normalize(vView))), power);
+    float day = smoothstep(-0.2, 0.45, dot(n, normalize(sunDirection)));
+    float lit = mix(0.04, 1.0, day);
+    gl_FragColor = linearToOutputTexel(vec4(glowColor, 1.0) * rim * intensity * lit);
   }
 `;
 
@@ -130,7 +147,7 @@ function loadTexture(loader, url, colorSpace) {
       url,
       (tex) => {
         tex.colorSpace = colorSpace ?? THREE.SRGBColorSpace;
-        tex.anisotropy = 8;
+        tex.anisotropy = 16;
         resolve(tex);
       },
       undefined,
@@ -216,7 +233,7 @@ export async function createWorld(scene, onProgress) {
     fragmentShader: earthFragment,
   });
 
-  const earth = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS, 96, 64), earthMat);
+  const earth = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS, 512, 256), earthMat);
   earthGroup.add(earth);
 
   if (textures.clouds) {
@@ -241,9 +258,10 @@ export async function createWorld(scene, onProgress) {
     new THREE.SphereGeometry(EARTH_RADIUS * 1.018, 64, 48),
     new THREE.ShaderMaterial({
       uniforms: {
-        glowColor: { value: new THREE.Color(0x4ea2ff) },
-        power: { value: 3.4 },
-        intensity: { value: 0.72 },
+        glowColor: { value: new THREE.Color(0x9fd4ff) },
+        sunDirection: { value: new THREE.Vector3(1, 0.2, 0.1) },
+        power: { value: 5.2 },
+        intensity: { value: 0.95 },
       },
       vertexShader: atmosVertex,
       fragmentShader: atmosFragment,
@@ -256,12 +274,13 @@ export async function createWorld(scene, onProgress) {
   earthGroup.add(atmosInner);
 
   const atmosOuter = new THREE.Mesh(
-    new THREE.SphereGeometry(EARTH_RADIUS * 1.14, 64, 48),
+    new THREE.SphereGeometry(EARTH_RADIUS * 1.038, 64, 48),
     new THREE.ShaderMaterial({
       uniforms: {
-        glowColor: { value: new THREE.Color(0x1b6dff) },
-        power: { value: 2.6 },
-        intensity: { value: 0.62 },
+        glowColor: { value: new THREE.Color(0x3d8dff) },
+        sunDirection: { value: new THREE.Vector3(1, 0.2, 0.1) },
+        power: { value: 3.4 },
+        intensity: { value: 0.55 },
       },
       vertexShader: atmosVertex,
       fragmentShader: atmosFragment,
@@ -304,6 +323,8 @@ export async function createWorld(scene, onProgress) {
       if (earth.userData.clouds?.material.uniforms?.sunDirection) {
         earth.userData.clouds.material.uniforms.sunDirection.value.copy(sunDir);
       }
+      atmosInner.material.uniforms.sunDirection.value.copy(sunDir);
+      atmosOuter.material.uniforms.sunDirection.value.copy(sunDir);
     },
   };
 }
@@ -350,25 +371,6 @@ function makeStars() {
   });
 
   return new THREE.Points(geo, mat);
-}
-
-function makeOrbit(radius, color, yScale, opacity) {
-  const pts = [];
-  for (let i = 0; i <= 160; i++) {
-    const a = (i / 160) * Math.PI * 2;
-    pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * yScale * radius, Math.sin(a) * radius));
-  }
-  const geo = new THREE.BufferGeometry().setFromPoints(pts);
-  const mat = new THREE.LineBasicMaterial({
-    color,
-    transparent: true,
-    opacity,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
-  const line = new THREE.Line(geo, mat);
-  line.frustumCulled = false;
-  return line;
 }
 
 function createCelestial(scene, moonMap) {
@@ -444,10 +446,6 @@ function createCelestial(scene, moonMap) {
   const SUN_DIST = 11.5;
   const MOON_DIST = 8.8;
 
-  const sunOrbit = makeOrbit(SUN_DIST, 0xf5c16c, 0.18, 0.16);
-  const moonOrbit = makeOrbit(MOON_DIST, 0x9bb7ff, 0.08, 0.22);
-  scene.add(sunOrbit, moonOrbit);
-
   const api = {
     sun: sunGroup,
     moon: moonGroup,
@@ -483,8 +481,6 @@ function createCelestial(scene, moonMap) {
 
       sunGroup.visible = state.sunVisible;
       moonGroup.visible = state.moonVisible;
-      sunOrbit.visible = state.sunVisible;
-      moonOrbit.visible = state.moonVisible;
       sunLight.intensity = state.sunVisible ? 2.4 : 0.12;
       moonLight.intensity = state.moonVisible ? 1.4 : 0;
     },
