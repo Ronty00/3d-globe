@@ -644,22 +644,24 @@ export function placesFor(iso) {
   return PLACES[iso] || { label: "Cities", items: [] };
 }
 
+const PLACE_SEARCH = [];
+for (const pack of Object.values(PLACES)) {
+  for (const p of pack.items) {
+    PLACE_SEARCH.push({
+      place: p,
+      blob: `${p.name}\n${p.region}\n${p.id}`.toLowerCase(),
+    });
+  }
+}
+
 export function findPlaces(query) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const hits = [];
-  for (const pack of Object.values(PLACES)) {
-    for (const p of pack.items) {
-      if (
-        p.name.toLowerCase().includes(q) ||
-        p.region.toLowerCase().includes(q) ||
-        p.id.includes(q)
-      ) {
-        hits.push(p);
-      }
-    }
+  for (let i = 0; i < PLACE_SEARCH.length && hits.length < 8; i++) {
+    if (PLACE_SEARCH[i].blob.includes(q)) hits.push(PLACE_SEARCH[i].place);
   }
-  return hits.slice(0, 8);
+  return hits;
 }
 
 export function getPlace(iso, placeId) {

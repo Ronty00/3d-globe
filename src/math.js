@@ -32,13 +32,18 @@ export function formatUTC(hours) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} UTC`;
 }
 
+const _startN = new THREE.Vector3();
+const _endN = new THREE.Vector3();
+const _rot = new THREE.Quaternion();
+const _slerp = new THREE.Quaternion();
+
 export function slerpCamera(start, end, t, out) {
-  const startN = start.clone().normalize();
-  const endN = end.clone().normalize();
-  const rot = new THREE.Quaternion().setFromUnitVectors(startN, endN);
-  const q = new THREE.Quaternion().slerpQuaternions(new THREE.Quaternion(), rot, t);
+  _startN.copy(start).normalize();
+  _endN.copy(end).normalize();
+  _rot.setFromUnitVectors(_startN, _endN);
+  _slerp.identity().slerp(_rot, t);
   return out
-    .copy(startN)
-    .applyQuaternion(q)
+    .copy(_startN)
+    .applyQuaternion(_slerp)
     .multiplyScalar(THREE.MathUtils.lerp(start.length(), end.length(), t));
 }

@@ -2,6 +2,19 @@
 
 A full-viewport **3D Earth** you can drag, search, and travel. Country and city dossiers cover culture, food, heritage, rankings, polaroid photos, story trips, and a day/night sun.
 
+## About this version
+
+Version 1.1 keeps the whole atlas and makes the globe lighter to run and quicker to build.
+
+- Search, places, trips, dossiers, pins, compare, sound, borders, the India claim, and the sun and moon are the same features as before.
+- The wide view still shows one dot per country. Gold division dots still appear only when you zoom in, below distance 3.75.
+- Hover and click use the same pick sizes. A selected division stays visible if you zoom back out.
+- While the globe is spinning far away, only the country dots are drawn. The division dots go to the GPU when you come close.
+- The desktop Earth stays the full 512×256 mesh. Tablets and phones use a coarser sphere so they stay smooth.
+- Mountain shading fades in as you approach the surface and stays quiet on the wide view.
+- Panels stay readable as solid dark glass, without blurring the moving globe every frame.
+- The production build splits Three.js from the atlas data, so a code change does not force the atlas to download again.
+
 ![Globe poster](docs/poster.png)
 
 ## Tutorial video

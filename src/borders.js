@@ -280,8 +280,7 @@ export function borderPositions() {
   return array;
 }
 
-export function createBorders(earthGroup) {
-  const positions = borderPositions();
+export function createBorders(earthGroup, positions = borderPositions()) {
   const geometry = new LineSegmentsGeometry();
   geometry.setPositions(positions);
   const material = new LineMaterial({

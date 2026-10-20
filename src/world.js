@@ -38,6 +38,7 @@ const earthFragment = /* glsl */ `
   uniform vec3 sunDirection;
   uniform vec3 moonDirection;
   uniform float moonIntensity;
+  uniform float relief;
   varying vec2 vUv;
   varying vec3 vNormalW;
   varying vec3 vPosW;
@@ -57,17 +58,21 @@ const earthFragment = /* glsl */ `
     // Per-pixel slope from the height map. The day/night split stays on the sphere normal.
     // Gain stays small on the full disk and rises when the camera is close,
     // so ridges show up close without mottling the sunny side.
-    float h = texture(bumpMap, vUv).r;
-    float uvSpan = length(dFdx(vUv)) + length(dFdy(vUv));
-    float gain = clamp(0.035 + 0.000015 / max(uvSpan, 0.000001), 0.035, 0.85);
-    vec3 surfX = dFdx(vPosW) + n * dFdx(h) * gain;
-    vec3 surfY = dFdy(vPosW) + n * dFdy(h) * gain;
-    vec3 nShade = cross(surfX, surfY);
-    float shadeLen = length(nShade);
-    nShade = shadeLen > 0.00001 ? nShade / shadeLen : n;
-    if (dot(nShade, viewDir) < 0.0) nShade = -nShade;
-    float slope = clamp(dot(nShade, sunDir) - ndl, -0.45, 0.45);
-    dayColor *= mix(1.0, 1.0 + slope * 1.55, dayFactor);
+    // relief is a uniform: 0 while the whole disk is on screen, 1 up close.
+    vec3 nShade = n;
+    if (relief > 0.001) {
+      float h = texture(bumpMap, vUv).r;
+      float uvSpan = length(dFdx(vUv)) + length(dFdy(vUv));
+      float gain = clamp(0.035 + 0.000015 / max(uvSpan, 0.000001), 0.035, 0.85) * relief;
+      vec3 surfX = dFdx(vPosW) + n * dFdx(h) * gain;
+      vec3 surfY = dFdy(vPosW) + n * dFdy(h) * gain;
+      nShade = cross(surfX, surfY);
+      float shadeLen = length(nShade);
+      nShade = shadeLen > 0.00001 ? nShade / shadeLen : n;
+      if (dot(nShade, viewDir) < 0.0) nShade = -nShade;
+      float slope = clamp(dot(nShade, sunDir) - ndl, -0.45, 0.45);
+      dayColor *= mix(1.0, 1.0 + slope * 1.55, dayFactor);
+    }
 
     // The day photo is linear and reads too dark on this canvas. The curve
     // lifts the sunny side to a full-day photo and keeps snow from clipping.
@@ -141,13 +146,14 @@ const atmosFragment = /* glsl */ `
   }
 `;
 
-function loadTexture(loader, url, colorSpace) {
+function loadTexture(loader, url, colorSpace, anisotropy) {
   return new Promise((resolve, reject) => {
     loader.load(
       url,
       (tex) => {
         tex.colorSpace = colorSpace ?? THREE.SRGBColorSpace;
-        tex.anisotropy = 16;
+        tex.anisotropy = anisotropy;
+        tex.generateMipmaps = true;
         resolve(tex);
       },
       undefined,
@@ -192,17 +198,28 @@ function makeGlowSprite(stops) {
   return tex;
 }
 
-export async function createWorld(scene, onProgress) {
+const DESK_TIER = {
+  earth: [512, 256],
+  clouds: [80, 56],
+  atmos: [64, 48],
+  anisotropy: 8,
+  stars: 4500,
+  sun: [32, 24],
+  moon: [48, 32],
+};
+
+export async function createWorld(scene, onProgress, tier = DESK_TIER) {
   const loader = new THREE.TextureLoader();
   const keys = Object.keys(TEX);
   let loaded = 0;
+  const aniso = tier.anisotropy ?? 8;
 
   const textures = {};
   await Promise.all(
     keys.map(async (key) => {
       const colorSpace = key === "bump" || key === "water" ? THREE.NoColorSpace : THREE.SRGBColorSpace;
       try {
-        textures[key] = await loadTexture(loader, TEX[key], colorSpace);
+        textures[key] = await loadTexture(loader, TEX[key], colorSpace, aniso);
       } catch {
         textures[key] = null;
       } finally {
@@ -228,17 +245,22 @@ export async function createWorld(scene, onProgress) {
       sunDirection: { value: new THREE.Vector3(1, 0.2, 0.1) },
       moonDirection: { value: new THREE.Vector3(-1, 0, 0) },
       moonIntensity: { value: 0.35 },
+      relief: { value: 0 },
     },
     vertexShader: earthVertex,
     fragmentShader: earthFragment,
   });
 
-  const earth = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS, 512, 256), earthMat);
+  const earth = new THREE.Mesh(
+    new THREE.SphereGeometry(EARTH_RADIUS, tier.earth[0], tier.earth[1]),
+    earthMat
+  );
+  earth.matrixAutoUpdate = false;
   earthGroup.add(earth);
 
   if (textures.clouds) {
     const clouds = new THREE.Mesh(
-      new THREE.SphereGeometry(EARTH_RADIUS * 1.012, 80, 56),
+      new THREE.SphereGeometry(EARTH_RADIUS * 1.012, tier.clouds[0], tier.clouds[1]),
       new THREE.ShaderMaterial({
         uniforms: {
           cloudMap: { value: textures.clouds },
@@ -255,7 +277,7 @@ export async function createWorld(scene, onProgress) {
   }
 
   const atmosInner = new THREE.Mesh(
-    new THREE.SphereGeometry(EARTH_RADIUS * 1.018, 64, 48),
+    new THREE.SphereGeometry(EARTH_RADIUS * 1.018, tier.atmos[0], tier.atmos[1]),
     new THREE.ShaderMaterial({
       uniforms: {
         glowColor: { value: new THREE.Color(0x9fd4ff) },
@@ -274,7 +296,7 @@ export async function createWorld(scene, onProgress) {
   earthGroup.add(atmosInner);
 
   const atmosOuter = new THREE.Mesh(
-    new THREE.SphereGeometry(EARTH_RADIUS * 1.038, 64, 48),
+    new THREE.SphereGeometry(EARTH_RADIUS * 1.038, tier.atmos[0], tier.atmos[1]),
     new THREE.ShaderMaterial({
       uniforms: {
         glowColor: { value: new THREE.Color(0x3d8dff) },
@@ -292,15 +314,25 @@ export async function createWorld(scene, onProgress) {
   );
   earthGroup.add(atmosOuter);
 
-  const stars = makeStars();
+  const stars = makeStars(tier.stars);
+  stars.matrixAutoUpdate = false;
   scene.add(stars);
 
-  const celestial = createCelestial(scene, textures.moon);
+  const celestial = createCelestial(scene, textures.moon, tier);
 
   const hemi = new THREE.HemisphereLight(0x9eb7ff, 0x0a0612, 0.28);
   scene.add(hemi);
   const ambient = new THREE.AmbientLight(0x334466, 0.18);
   scene.add(ambient);
+
+  earth.updateMatrix();
+  atmosInner.matrixAutoUpdate = false;
+  atmosInner.updateMatrix();
+  atmosOuter.matrixAutoUpdate = false;
+  atmosOuter.updateMatrix();
+
+  const sunDir = new THREE.Vector3();
+  const moonDir = new THREE.Vector3();
 
   return {
     root,
@@ -309,28 +341,29 @@ export async function createWorld(scene, onProgress) {
     earthMat,
     celestial,
     stars,
-    update(dt, state) {
+    update(dt, state, relief = 1) {
       if (earth.userData.clouds) {
         earth.userData.clouds.rotation.y += dt * 0.012;
       }
       celestial.update(dt, state);
-      const sunPos = celestial.sun.position;
-      const moonPos = celestial.moon.position;
-      const sunDir = sunPos.clone().normalize();
+      if (earthMat.uniforms.relief.value !== relief) earthMat.uniforms.relief.value = relief;
+      if (!celestial.changed) return;
+      sunDir.copy(celestial.sun.position).normalize();
+      moonDir.copy(celestial.moon.position).normalize();
       earthMat.uniforms.sunDirection.value.copy(sunDir);
-      earthMat.uniforms.moonDirection.value.copy(moonPos).normalize();
+      earthMat.uniforms.moonDirection.value.copy(moonDir);
       earthMat.uniforms.moonIntensity.value = state.moonVisible ? 0.38 : 0.0;
       if (earth.userData.clouds?.material.uniforms?.sunDirection) {
         earth.userData.clouds.material.uniforms.sunDirection.value.copy(sunDir);
       }
       atmosInner.material.uniforms.sunDirection.value.copy(sunDir);
       atmosOuter.material.uniforms.sunDirection.value.copy(sunDir);
+      celestial.changed = false;
     },
   };
 }
 
-function makeStars() {
-  const count = 4500;
+function makeStars(count = 4500) {
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
@@ -373,13 +406,13 @@ function makeStars() {
   return new THREE.Points(geo, mat);
 }
 
-function createCelestial(scene, moonMap) {
+function createCelestial(scene, moonMap, tier) {
   const sunGroup = new THREE.Group();
   const moonGroup = new THREE.Group();
   scene.add(sunGroup, moonGroup);
 
   const sunCore = new THREE.Mesh(
-    new THREE.SphereGeometry(0.78, 48, 48),
+    new THREE.SphereGeometry(0.78, tier.sun[0], tier.sun[1]),
     new THREE.MeshBasicMaterial({ color: 0xfff1c1 })
   );
   const sunGlow = new THREE.Sprite(
@@ -418,7 +451,7 @@ function createCelestial(scene, moonMap) {
   sunGroup.add(sunCore, sunGlow, sunHalo, sunLight);
 
   const moon = new THREE.Mesh(
-    new THREE.SphereGeometry(0.52, 48, 32),
+    new THREE.SphereGeometry(0.52, tier.moon[0], tier.moon[1]),
     new THREE.MeshStandardMaterial({
       map: moonMap,
       roughness: 1,
@@ -445,12 +478,18 @@ function createCelestial(scene, moonMap) {
 
   const SUN_DIST = 11.5;
   const MOON_DIST = 8.8;
+  sunLight.target.position.set(0, 0, 0);
+  sunLight.target.updateMatrixWorld();
+  let appliedSun = NaN;
+  let appliedMoon = NaN;
+  let appliedVis = "";
 
   const api = {
     sun: sunGroup,
     moon: moonGroup,
     sunLight,
     moonLight,
+    changed: true,
     update(dt, state) {
       if (state.orbiting && !state.realtime) {
         state.sunAngle += dt * state.sunSpeed;
@@ -465,11 +504,16 @@ function createCelestial(scene, moonMap) {
         state.hours = (((state.sunAngle - Math.PI) / (Math.PI * 2)) * 24 + 24) % 24;
       }
 
+      const vis = `${state.sunVisible ? 1 : 0}${state.moonVisible ? 1 : 0}`;
+      if (state.sunAngle === appliedSun && state.moonAngle === appliedMoon && vis === appliedVis) return;
+      appliedSun = state.sunAngle;
+      appliedMoon = state.moonAngle;
+      appliedVis = vis;
+      api.changed = true;
+
       const sa = state.sunAngle;
       sunGroup.position.set(Math.cos(sa) * SUN_DIST, Math.sin(sa) * 0.18 * SUN_DIST, Math.sin(sa) * SUN_DIST);
       sunLight.position.copy(sunGroup.position);
-      sunLight.target.position.set(0, 0, 0);
-      sunLight.target.updateMatrixWorld();
 
       const ma = state.moonAngle;
       moonGroup.position.set(

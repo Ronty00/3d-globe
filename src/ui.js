@@ -74,8 +74,17 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
     if (item) onSelect(toLocation(item));
   });
 
+  let searchFrame = 0;
   search.addEventListener("input", () => {
     const q = search.value;
+    if (searchFrame) cancelAnimationFrame(searchFrame);
+    searchFrame = requestAnimationFrame(() => {
+      searchFrame = 0;
+      runSearch(q);
+    });
+  });
+
+  function runSearch(q) {
     if (q.trim()) revealSheetForSearch();
     if (!q.trim()) {
       results.hidden = true;
@@ -115,7 +124,7 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
       .join("");
     const html = countryHtml + placeHtml + topicHtml;
     results.innerHTML = html || `<li><span></span><span class="place-name">No matches</span></li>`;
-  });
+  }
 
   results.addEventListener("click", (e) => {
     const li = e.target.closest("li[data-id], li[data-place]");
@@ -160,6 +169,9 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
   });
 
   const slider = document.getElementById("time-slider");
+  const timeLabel = document.getElementById("time-label");
+  let shownHours = "";
+  let shownSlider = "";
   slider.addEventListener("input", () => {
     onCelestial("setHours", Number(slider.value));
   });
@@ -432,17 +444,25 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
       closeDossier();
     },
     showTooltip(loc, x, y) {
-      if (!loc || window.matchMedia("(pointer: coarse)").matches) {
+      if (!loc || coarsePointer) {
         tooltip.hidden = true;
         return;
       }
-      tooltip.hidden = false;
-      tooltip.textContent = loc.displayName
+      const text = loc.displayName
         ? `${loc.displayName} · ${loc.country || loc.name}`
         : `${loc.name} · ${loc.capital}`;
+      tooltip.hidden = false;
+      if (tooltip.textContent !== text) {
+        tooltip.textContent = text;
+        tipSize.w = 0;
+      }
       const pad = 8;
-      const tw = tooltip.offsetWidth;
-      const th = tooltip.offsetHeight;
+      if (!tipSize.w) {
+        tipSize.w = tooltip.offsetWidth;
+        tipSize.h = tooltip.offsetHeight;
+      }
+      const tw = tipSize.w;
+      const th = tipSize.h;
       const bounds = canvasBounds();
       let left = x + 14;
       let top = y - th - 12;
@@ -453,8 +473,16 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
       tooltip.style.top = `${Math.round(top)}px`;
     },
     setHours(hours) {
-      slider.value = String(hours);
-      document.getElementById("time-label").textContent = formatUTC(hours);
+      const label = formatUTC(hours);
+      if (label !== shownHours) {
+        shownHours = label;
+        timeLabel.textContent = label;
+      }
+      if (document.activeElement === slider) return;
+      const next = String(Math.round(hours * 50) / 50);
+      if (next === shownSlider) return;
+      shownSlider = next;
+      slider.value = next;
     },
     setStatus,
     hideLoader() {
@@ -468,9 +496,32 @@ export function bindUI({ onSelect, onReset, onToggleAuto, onCelestial, onExplore
   };
 }
 
+const coarseMedia = window.matchMedia("(pointer: coarse)");
+let coarsePointer = coarseMedia.matches;
+coarseMedia.addEventListener?.("change", () => {
+  coarsePointer = coarseMedia.matches;
+});
+
+const tipSize = { w: 0, h: 0 };
+let canvasBox = null;
+window.addEventListener("resize", () => {
+  canvasBox = null;
+});
+window.visualViewport?.addEventListener("resize", () => {
+  canvasBox = null;
+});
+window.visualViewport?.addEventListener("scroll", () => {
+  canvasBox = null;
+});
+
 function canvasBounds() {
+  if (canvasBox) return canvasBox;
   const canvas = document.getElementById("globe");
-  return canvas?.getBoundingClientRect() || { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+  const rect = canvas?.getBoundingClientRect();
+  canvasBox = rect
+    ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+    : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+  return canvasBox;
 }
 
 function toLocation(item) {

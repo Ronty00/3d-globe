@@ -1,10 +1,17 @@
 import * as THREE from "three";
 import { EARTH_RADIUS, latLngToVector3 } from "./math.js";
 
-function slerpVec(a, b, t) {
-  const q = new THREE.Quaternion().setFromUnitVectors(a.clone().normalize(), b.clone().normalize());
-  const qt = new THREE.Quaternion().slerpQuaternions(new THREE.Quaternion(), q, t);
-  return a.clone().normalize().applyQuaternion(qt);
+const _unitA = new THREE.Vector3();
+const _unitB = new THREE.Vector3();
+const _arcQ = new THREE.Quaternion();
+const _arcPartial = new THREE.Quaternion();
+
+function slerpVec(a, b, t, target) {
+  _unitA.copy(a).normalize();
+  _unitB.copy(b).normalize();
+  _arcQ.setFromUnitVectors(_unitA, _unitB);
+  _arcPartial.identity().slerp(_arcQ, t);
+  return target.copy(_unitA).applyQuaternion(_arcPartial);
 }
 
 export function createGlobeExtras(earthGroup) {
@@ -26,7 +33,7 @@ export function createGlobeExtras(earthGroup) {
     while (group.children.length) {
       const ch = group.children[0];
       group.remove(ch);
-      ch.geometry?.dispose?.();
+      if (ch.geometry && ch.geometry !== siteGeo) ch.geometry.dispose();
     }
     sitesMesh = null;
     siteRecords = [];
@@ -42,7 +49,7 @@ export function createGlobeExtras(earthGroup) {
       for (let k = 0; k <= 48; k++) {
         const t = k / 48;
         const lift = Math.sin(t * Math.PI) * 0.06;
-        pts.push(slerpVec(a, b, t).multiplyScalar(EARTH_RADIUS + 0.03 + lift));
+        pts.push(slerpVec(a, b, t, new THREE.Vector3()).multiplyScalar(EARTH_RADIUS + 0.03 + lift));
       }
       group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
     }

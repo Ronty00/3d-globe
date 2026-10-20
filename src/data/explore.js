@@ -200,29 +200,36 @@ export function flightHours(km) {
   return (km / 820 + 0.6).toFixed(1);
 }
 
-function catalogHits(q) {
-  const hits = [];
+let topicRows = null;
+
+function topicIndex() {
+  if (topicRows) return topicRows;
+  const isoOf = new Map();
+  for (const [iso, pack] of Object.entries(PLACES)) {
+    for (const place of pack.items) isoOf.set(place.id, iso);
+  }
+  topicRows = [];
   for (const [placeId, cat] of Object.entries(CATALOGS)) {
-    let iso = "in";
-    for (const [code, pack] of Object.entries(PLACES)) {
-      if (pack.items.some((p) => p.id === placeId)) iso = code;
-    }
+    const iso = isoOf.get(placeId) || "in";
     const place = getPlace(iso, placeId);
     if (!place) continue;
     for (const [kind, list] of Object.entries(cat)) {
       for (const it of list) {
-        const blob = `${it.name} ${it.note} ${it.query}`.toLowerCase();
-        if (!blob.includes(q)) continue;
-        hits.push({
-          kind: "topic",
-          topic: kind,
-          label: it.name,
-          place,
-          iso,
+        topicRows.push({
+          blob: `${it.name}\n${it.note}\n${it.query}`.toLowerCase(),
+          hit: { kind: "topic", topic: kind, label: it.name, place, iso },
         });
-        if (hits.length >= 8) return hits;
       }
     }
+  }
+  return topicRows;
+}
+
+function catalogHits(q) {
+  const rows = topicIndex();
+  const hits = [];
+  for (let i = 0; i < rows.length && hits.length < 8; i++) {
+    if (rows[i].blob.includes(q)) hits.push(rows[i].hit);
   }
   return hits;
 }

@@ -339,15 +339,17 @@ export const featured = [
   },
 ];
 
+const COUNTRY_SEARCH = countries.map((c) => ({
+  country: c,
+  blob: `${c.name}\n${c.capital}\n${c.region}`.toLowerCase(),
+}));
+
 export function searchCountries(query) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  return countries
-    .filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.capital.toLowerCase().includes(q) ||
-        c.region.toLowerCase().includes(q)
-    )
-    .slice(0, 8);
+  const hits = [];
+  for (let i = 0; i < COUNTRY_SEARCH.length && hits.length < 8; i++) {
+    if (COUNTRY_SEARCH[i].blob.includes(q)) hits.push(COUNTRY_SEARCH[i].country);
+  }
+  return hits;
 }

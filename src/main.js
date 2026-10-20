@@ -8,18 +8,20 @@ import { EARTH_RADIUS, easeInOutCubic, latLngToVector3, slerpCamera } from "./ma
 import { earthAngleAt, fitVerticalFov, installViewport, measureOcclusion } from "./layout.js";
 import { featured } from "./data/locations.js";
 import { createGlobeExtras } from "./globeExtras.js";
-import { createBorders } from "./borders.js";
 import { createAmbience } from "./sound.js";
 import { resolveStop } from "./data/explore.js";
 
 const canvas = document.getElementById("globe");
+const bootLayout = document.documentElement.dataset.layout || "desk";
+const compactBoot = bootLayout === "handset" || bootLayout === "land";
 const renderer = new THREE.WebGLRenderer({
   canvas,
-  antialias: true,
+  antialias: !compactBoot,
   alpha: false,
+  stencil: false,
   powerPreference: "high-performance",
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setPixelRatio(1);
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -71,9 +73,11 @@ let tripToken = 0;
 let resumeTimer = 0;
 let hoverId = null;
 
-const pointer = new THREE.Vector2();
 const raycaster = new THREE.Raycaster();
-raycaster.params.Points = { threshold: 0.08 };
+let hoverFrame = 0;
+let hoverX = 0;
+let hoverY = 0;
+let hotMarker = false;
 
 const ui = bindUI({
   onSelect(loc) {
@@ -256,26 +260,41 @@ async function focusLocation(loc) {
   await moving;
 }
 
-function ndc(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const w = rect.width || window.innerWidth;
-  const h = rect.height || window.innerHeight;
-  pointer.x = ((clientX - rect.left) / w) * 2 - 1;
-  pointer.y = -((clientY - rect.top) / h) * 2 + 1;
+function pickMarker(clientX, clientY) {
+  if (!markers) return null;
+  return markers.pick(clientX, clientY, camera, canvas);
 }
 
-function pick(clientX, clientY) {
-  ndc(clientX, clientY);
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObject(markers.pickables, false);
-  if (!hits.length) return null;
-  return markers.recordAt(hits[0].instanceId);
+function queueHover(clientX, clientY) {
+  hoverX = clientX;
+  hoverY = clientY;
+  if (hoverFrame) return;
+  hoverFrame = requestAnimationFrame(() => {
+    hoverFrame = 0;
+    if (!markers || down || !canvas.matches(":hover")) return;
+    const rec = pickMarker(hoverX, hoverY);
+    const id = rec?.id ?? null;
+    const hot = Boolean(rec);
+    if (hot !== hotMarker) {
+      hotMarker = hot;
+      canvas.classList.toggle("is-hot", hot);
+    }
+    if (id !== hoverId) {
+      hoverId = id;
+      if (rec) setHoverStatus(`${rec.displayName || rec.name} · ${rec.capital}`);
+      else setHoverStatus(camera.userData.coarsePointer ? "Tap a country" : "Hover a country");
+    }
+    ui.showTooltip(rec, hoverX, hoverY);
+  });
 }
 
 let down = null;
 canvas.addEventListener("pointerdown", (e) => {
   down = { x: e.clientX, y: e.clientY };
   canvas.classList.add("is-dragging");
+  hotMarker = false;
+  canvas.classList.remove("is-hot");
+  ui.showTooltip(null);
   pauseAuto();
 });
 canvas.addEventListener("pointerup", (e) => {
@@ -285,30 +304,33 @@ canvas.addEventListener("pointerup", (e) => {
   down = null;
   scheduleResume();
   if (dist > 6) return;
-  ndc(e.clientX, e.clientY);
-  raycaster.setFromCamera(pointer, camera);
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width || window.innerWidth;
+  const h = rect.height || window.innerHeight;
+  raycaster.setFromCamera(
+    {
+      x: ((e.clientX - rect.left) / w) * 2 - 1,
+      y: -((e.clientY - rect.top) / h) * 2 + 1,
+    },
+    camera
+  );
   const site = extras?.pickSite(raycaster);
   if (site) {
     flyToLatLng(site.lat, site.lng, 2.85);
     return;
   }
-  const rec = pick(e.clientX, e.clientY);
+  const rec = pickMarker(e.clientX, e.clientY);
   if (rec) focusLocation(rec);
 });
 canvas.addEventListener("pointermove", (e) => {
-  if (!markers) return;
-  const rec = pick(e.clientX, e.clientY);
-  const id = rec?.id ?? null;
-  canvas.classList.toggle("is-hot", Boolean(rec) && !down);
-  if (id !== hoverId) {
-    hoverId = id;
-    if (rec) setHoverStatus(`${rec.displayName || rec.name} · ${rec.capital}`);
-    else setHoverStatus(camera.userData.coarsePointer ? "Tap a country" : "Hover a country");
-  }
-  ui.showTooltip(down ? null : rec, e.clientX, e.clientY);
+  if (!markers || down) return;
+  queueHover(e.clientX, e.clientY);
 });
 canvas.addEventListener("pointerleave", () => {
+  if (hoverFrame) cancelAnimationFrame(hoverFrame);
+  hoverFrame = 0;
   ui.showTooltip(null);
+  hotMarker = false;
   canvas.classList.remove("is-hot");
 });
 canvas.addEventListener(
@@ -357,7 +379,7 @@ function onViewport(box) {
   hud.style.transform = `translate(${box.left}px, ${box.top}px)`;
 
   if (box.width < 2 || box.height < 2) return;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(pixelRatioFor(box.width, box.height, box.layout));
   renderer.setSize(box.width, box.height, false);
   syncBorderResolution();
 
@@ -408,6 +430,51 @@ function syncCameraNear() {
   camera.updateProjectionMatrix();
 }
 
+function pixelRatioFor(width, height, layout) {
+  const dpr = window.devicePixelRatio || 1;
+  const cap = layout === "handset" || layout === "land" ? 1.25 : layout === "slate" ? 1.5 : 1.75;
+  const budget = 4_500_000;
+  const capped = Math.min(dpr, cap);
+  const pixels = width * height * capped * capped;
+  if (pixels <= budget) return capped;
+  return Math.max(1, Math.sqrt(budget / (width * height)));
+}
+
+function renderTier() {
+  const layout = document.documentElement.dataset.layout || "desk";
+  if (layout === "handset" || layout === "land") {
+    return {
+      earth: [256, 128],
+      clouds: [48, 32],
+      atmos: [40, 24],
+      anisotropy: 4,
+      stars: 2200,
+      sun: [24, 16],
+      moon: [28, 18],
+    };
+  }
+  if (layout === "slate") {
+    return {
+      earth: [384, 192],
+      clouds: [64, 40],
+      atmos: [48, 32],
+      anisotropy: 6,
+      stars: 3200,
+      sun: [32, 24],
+      moon: [36, 24],
+    };
+  }
+  return {
+    earth: [512, 256],
+    clouds: [80, 56],
+    atmos: [64, 48],
+    anisotropy: 8,
+    stars: 4500,
+    sun: [32, 24],
+    moon: [48, 32],
+  };
+}
+
 function syncBorderResolution() {
   if (!borders) return;
   const w = renderer.domElement.width;
@@ -416,7 +483,10 @@ function syncBorderResolution() {
   borders.material.resolution.set(w, h);
 }
 
+let frameLive = true;
+
 function tick() {
+  if (!frameLive) return;
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
 
@@ -437,20 +507,33 @@ function tick() {
     controls.update();
   }
 
-  world?.update(dt, state);
-  world?.earthGroup.updateMatrixWorld();
+  const gap = Math.max(0, camera.position.length() - EARTH_RADIUS);
+  const relief = 1 - THREE.MathUtils.smoothstep(gap, 1.15, 2.7);
+  world?.update(dt, state, relief);
   syncCameraNear();
-  syncBorderResolution();
   markers?.update(t, state.selectedId, camera);
   ui.setHours(state.hours);
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
 
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    frameLive = false;
+    return;
+  }
+  if (frameLive) return;
+  frameLive = true;
+  clock.getDelta();
+  requestAnimationFrame(tick);
+});
+
 async function boot() {
-  world = await createWorld(scene, (p, label) => ui.setLoadProgress(p, label));
+  const borderJob = import("./borders.js").then((mod) => mod.borderPositions());
+  world = await createWorld(scene, (p, label) => ui.setLoadProgress(p, label), renderTier());
+  const [borderMod, positions] = await Promise.all([import("./borders.js"), borderJob]);
   markers = createMarkers(world.earthGroup);
-  borders = createBorders(world.earthGroup);
+  borders = borderMod.createBorders(world.earthGroup, positions);
   extras = createGlobeExtras(world.earthGroup);
   ui.hideLoader();
   refreshViewport(true);
